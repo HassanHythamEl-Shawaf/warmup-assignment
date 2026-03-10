@@ -325,7 +325,63 @@ function getTotalActiveHoursPerMonth(textFile, driverID, month) {
 // month: (typeof number)
 // Returns: string formatted as hhh:mm:ss
 // ============================================================
-
+function getRequiredHoursPerMonth(textFile, rateFile, bonusCount, driverID, month) {
+    const shiftsContent = fs.readFileSync(textFile, "utf-8");
+    const rateContent = fs.readFileSync(rateFile, "utf-8");
+    
+    const shiftsLines = shiftsContent.trim().split("\n");
+    const rateLines = rateContent.trim().split("\n");
+    
+    let dayOff = "";
+    for (const line of rateLines) {
+        if (!line) continue;
+        const fields = line.split(",");
+        if (fields[0].trim() === driverID) {
+            dayOff = fields[1].trim();
+            break;
+        }
+    }
+    
+    const normalizedMonth = String(month).padStart(2, "0");
+    let requiredSeconds = 0;
+    
+    for (const line of shiftsLines) {
+        if (!line) continue;
+        const fields = line.split(",");
+        const currentDriverID = fields[0].trim();
+        const currentDate = fields[2].trim();
+        
+        if (currentDriverID === driverID) {
+            const dateMonth = currentDate.substring(5, 7);
+            if (dateMonth === normalizedMonth) {
+                const dayOfWeek = getDayOfWeek(currentDate);
+                
+                if (dayOfWeek !== dayOff) {
+                    const year = Number(currentDate.substring(0, 4));
+                    const monthNum = Number(currentDate.substring(5, 7));
+                    const dayNum = Number(currentDate.substring(8, 10));
+                    
+                    let quota;
+                    if (year === 2025 && monthNum === 4 && dayNum >= 10 && dayNum <= 30) {
+                        quota = 6 * 3600;
+                    } else {
+                        quota = 8 * 3600 + 24 * 60;
+                    }
+                    
+                    requiredSeconds += quota;
+                }
+            }
+        }
+    }
+    
+    requiredSeconds -= bonusCount * 2 * 3600;
+    
+    if (requiredSeconds < 0) {
+        requiredSeconds = 0;
+    }
+    
+    return secondsToLongTimeString(requiredSeconds);
+}
 
 // ============================================================
 // Function 10: getNetPay(driverID, actualHours, requiredHours, rateFile)
@@ -335,8 +391,56 @@ function getTotalActiveHoursPerMonth(textFile, driverID, month) {
 // rateFile: (typeof string) path to driver rates text file
 // Returns: integer (net pay)
 // ============================================================
-
-
+function getNetPay(driverID, actualHours, requiredHours, rateFile) {
+    const fileContent = fs.readFileSync(rateFile, "utf-8");
+    const lines = fileContent.trim().split("\n");
+    
+    let basePay = 0;
+    let tier = 0;
+    
+    for (const line of lines) {
+        if (!line) continue;
+        const fields = line.split(",");
+        if (fields[0].trim() === driverID) {
+            basePay = Number(fields[2]);
+            tier = Number(fields[3]);
+            break;
+        }
+    }
+    
+    const allowedMissingHours = {
+        1: 50,  // Senior
+        2: 20,  // Regular
+        3: 10,  // Junior
+        4: 3    // Trainee
+    };
+    
+    const allowed = allowedMissingHours[tier] || 0;
+    
+    const actualSeconds = parseTimeToSeconds(actualHours);
+    const requiredSeconds = parseTimeToSeconds(requiredHours);
+    
+    let missingSeconds = requiredSeconds - actualSeconds;
+    
+    if (missingSeconds < 0) {
+        return basePay;
+    }
+    
+    const allowedSeconds = allowed * 3600;
+    if (missingSeconds <= allowedSeconds) {
+        return basePay;
+    }
+    
+    const billableMissingSeconds = missingSeconds - allowedSeconds;
+    const billableMissingHours = Math.floor(billableMissingSeconds / 3600);
+    
+    const deductionRatePerHour = Math.floor(basePay / 185);
+    const salaryDeduction = billableMissingHours * deductionRatePerHour;
+    
+    const netPay = basePay - salaryDeduction;
+    
+    return netPay;
+}
 module.exports = {
     getShiftDuration,
     getIdleTime,
